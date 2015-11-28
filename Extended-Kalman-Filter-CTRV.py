@@ -9,11 +9,12 @@ import matplotlib.pyplot as plt
 from scipy.stats import norm
 from sympy import Symbol, symbols, Matrix, sin, cos
 from sympy.interactive import printing
+import csv
 printing.init_printing()
 
 # <codecell>
 
-%matplotlib inline
+#%matplotlib inline
 fw = 10 # figure width
 
 # <headingcell level=1>
@@ -121,7 +122,7 @@ gs.jacobian(state)
 # <codecell>
 
 P = np.diag([1000.0, 1000.0, 1000.0, 1000.0, 1000.0])
-print(P, P.shape)
+print "Initial Covariance",(P, P.shape)
 
 fig = plt.figure(figsize=(5, 5))
 im = plt.imshow(P, interpolation="none", cmap=plt.get_cmap('binary'))
@@ -165,7 +166,7 @@ sVelocity= 8.8*dt # assume 8.8m/s2 as maximum acceleration, forcing the vehicle
 sYaw     = 1.0*dt # assume 1.0rad/s2 as the maximum turn rate acceleration for the vehicle
 
 Q = np.diag([sGPS**2, sGPS**2, sCourse**2, sVelocity**2, sYaw**2])
-print(Q, Q.shape)
+print "Process Noise", (Q, Q.shape)
 
 # <codecell>
 
@@ -283,7 +284,7 @@ R = np.matrix([[sGPS**2, 0.0, 0.0, 0.0],
                [0.0, 0.0, sspeed**2, 0.0],
                [0.0, 0.0, 0.0, syaw**2]])
 
-print(R, R.shape)
+print "Observation Noise",(R, R.shape)
 
 # <codecell>
 
@@ -317,7 +318,7 @@ plt.colorbar(im, cax=cax);
 # <codecell>
 
 I = np.eye(numstates)
-print(I, I.shape)
+print "A matrix",(I, I.shape)
 
 # <headingcell level=2>
 
@@ -345,7 +346,7 @@ GPS=np.hstack((True, (np.diff(ds)>0.0).astype('bool'))) # GPS Trigger for Kalman
 # <codecell>
 
 x = np.matrix([[mx[0], my[0], course[0]/180.0*np.pi, speed[0]/3.6+0.001, yawrate[0]/180.0*np.pi]]).T
-print(x, x.shape)
+print "State Initial and Shape ",(x, x.shape)
 
 U=float(np.cos(x[2])*x[3])
 V=float(np.sin(x[2])*x[3])
@@ -364,7 +365,7 @@ plt.axis('equal')
 measurements = np.vstack((mx, my, speed/3.6, yawrate/180.0*np.pi))
 # Lenth of the measurement
 m = measurements.shape[1]
-print(measurements.shape)
+print "Measurement Shape", (measurements.shape)
 
 # <codecell>
 
@@ -403,27 +404,50 @@ dstate=[]
 # $$x_k= \begin{bmatrix} x \\ y \\ \psi \\ v \\ \dot\psi \end{bmatrix} = \begin{bmatrix} \text{Position X} \\ \text{Position Y} \\ \text{Heading} \\ \text{Velocity} \\ \text{Yaw Rate} \end{bmatrix} =  \underbrace{\begin{matrix}x[0] \\ x[1] \\ x[2] \\ x[3] \\ x[4]  \end{matrix}}_{\textrm{Python Nomenclature}}$$
 
 # <codecell>
+dwriter = csv.writer(open("EKFout.csv","wb"),delimiter=",")
+dwriter.writerow(["x0,x1,x2,x3,x4,z0,z1,z2,z3,dstate,gps"])
 
 for filterstep in range(m):
+
+    if np.abs(yawrate[filterstep])<0.0001:
+        ddstate = 0
+    else:
+        ddstate = 1
+    if GPS[filterstep]:
+        JH = np.matrix([[1.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0, 1.0]])
+    else:
+        JH = np.matrix([[0.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0, 1.0]])  
+    # Update the estimate via
+    Z = measurements[:,filterstep].reshape(JH.shape[0],1)
+
+    dataout = [x[0],x[1],x[2],x[3],x[4],Z[0],Z[1],Z[2],Z[3],ddstate,GPS[filterstep]];
+    dwriter.writerow([str(float(wwww)) for wwww in dataout])
+
 
     # Time Update (Prediction)
     # ========================
     # Project the state ahead
     # see "Dynamic Matrix"
-    if np.abs(yawrate[filterstep])<0.0001: # Driving straight
+    if ddstate == 0: # Driving straight
         x[0] = x[0] + x[3]*dt * np.cos(x[2])
         x[1] = x[1] + x[3]*dt * np.sin(x[2])
         x[2] = x[2]
         x[3] = x[3]
         x[4] = 0.0000001 # avoid numerical issues in Jacobians
-        dstate.append(0)
+        dstate.append(ddstate) # was 0
     else: # otherwise
         x[0] = x[0] + (x[3]/x[4]) * (np.sin(x[4]*dt+x[2]) - np.sin(x[2]))
         x[1] = x[1] + (x[3]/x[4]) * (-np.cos(x[4]*dt+x[2])+ np.cos(x[2]))
         x[2] = (x[2] + x[4]*dt + np.pi) % (2.0*np.pi) - np.pi
         x[3] = x[3]
         x[4] = x[4]
-        dstate.append(1)
+        dstate.append(ddstate)
     
     # Calculate the Jacobian of the Dynamic Matrix A
     # see "Calculate the Jacobian of the Dynamic Matrix with respect to the state vector"
@@ -451,22 +475,11 @@ for filterstep in range(m):
                     [float(x[3])],
                     [float(x[4])]])
 
-    if GPS[filterstep]:
-        JH = np.matrix([[1.0, 0.0, 0.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0, 0.0, 0.0],
-                        [0.0, 0.0, 0.0, 1.0, 0.0],
-                        [0.0, 0.0, 0.0, 0.0, 1.0]])
-    else:
-        JH = np.matrix([[0.0, 0.0, 0.0, 0.0, 0.0],
-                        [0.0, 0.0, 0.0, 0.0, 0.0],
-                        [0.0, 0.0, 0.0, 1.0, 0.0],
-                        [0.0, 0.0, 0.0, 0.0, 1.0]])        
+        
     
     S = JH*P*JH.T + R
     K = (P*JH.T) * np.linalg.inv(S)
 
-    # Update the estimate via
-    Z = measurements[:,filterstep].reshape(JH.shape[0],1)
     y = Z - (hx)                         # Innovation or Residual
     x = x + (K*y)
 
@@ -493,6 +506,8 @@ for filterstep in range(m):
     Kdy.append(float(K[3,0]))
     Kddx.append(float(K[4,0]))
 
+
+
 # <headingcell level=2>
 
 # Plots
@@ -502,6 +517,8 @@ for filterstep in range(m):
 # Uncertainties
 
 # <codecell>
+dwriter.close()
+sys.exit(0);
 
 fig = plt.figure(figsize=(fw,9))
 plt.semilogy(range(m),Px, label='$x$')
@@ -635,7 +652,7 @@ plt.legend(loc='best')
 plt.axis('equal')
 #plt.tight_layout()
 
-#plt.savefig('Extended-Kalman-Filter-CTRV-Position.png', dpi=72, transparent=True, bbox_inches='tight')
+plt.savefig('Extended-Kalman-Filter-CTRV-Position.png', dpi=72, transparent=True, bbox_inches='tight')
 
 # <headingcell level=3>
 
